@@ -3,7 +3,7 @@
 Source: https://github.com/sherlock-audit/2024-08-saffron-finance-judging/issues/85 
 
 ## Found by 
-0x73696d616f, dobrevaleri
+0x73696d616f
 ### Summary
 
 `totalEarnings` in [LidoVault::vaultEndedWithdraw()](https://github.com/sherlock-audit/2024-08-saffron-finance/blob/main/lido-fiv/contracts/LidoVault.sol#L709) is calculated as:
@@ -102,6 +102,16 @@ Now, summing both users' withdrawals, `143.75 + 48.75 == 192.5`, which is bigger
 ```solidity
 totalProtocolFee += lido.getSharesByPooledEth(protocolFee);
 ```
+
+
+
+## Discussion
+
+**sherlock-admin2**
+
+The protocol team fixed this issue in the following PRs/commits:
+https://github.com/saffron-finance/lido-fiv/pull/29
+
 
 # Issue H-2: The incorrect accounting of protocol fee will cause double charging fee and wrong distribution of earnings for variable users 
 
@@ -558,12 +568,21 @@ Logs:
 
 
 
+
+## Discussion
+
+**sherlock-admin2**
+
+The protocol team fixed this issue in the following PRs/commits:
+https://github.com/saffron-finance/lido-fiv/pull/29
+
+
 # Issue M-1: `LidoVault::vaultEndedWithdraw` doesn't take into consideration income withdrawals before slashing, blocking variable users from withdrwing their income 
 
 Source: https://github.com/sherlock-audit/2024-08-saffron-finance-judging/issues/73 
 
 ## Found by 
-0xAlix2
+0x73696d616f, 0xAlix2, tobi0x18
 ### Summary
 
 When FIXED users deposit ETH, they are being deposited in Lido, and Lido might experience slashing. This is expected on the protocol's side, as the impact would be lower income, but it is expected for the protocol to keep functioning as expected, from the contest README:
@@ -654,118 +673,21 @@ In `LidoVault::vaultEndedWithdraw`, when calculating the `totalEarnings` when a 
 totalEarnings = Math.min(totalEarnings, vaultEndingETHBalance);
 ```
 
-# Issue M-2: Lido slashing after requesting the ending withdrawal will affect the stETH shares / eth, leading to some users inability to withdraw 
 
-Source: https://github.com/sherlock-audit/2024-08-saffron-finance-judging/issues/90 
 
-## Found by 
-0x73696d616f
-### Summary
+## Discussion
 
-In [LidoVault::vaultEndedWithdraw()](https://github.com/sherlock-audit/2024-08-saffron-finance/blob/main/lido-fiv/contracts/LidoVault.sol#L709), whenever some variable users have not withdrawn, it fetches the `vaultEndingStakesAmount = stakingShares();` and `vaultEndingETHBalance = stakingBalance();`, and then requests withrawals. However, slashing may occur in this withdrawal, which will lead to incorrect calculation of variable users earnings as the ratio stored is before slashing and users will withdraw too much, leading to other users not being able to withdraw.
+**sherlock-admin2**
 
-### Root Cause
+The protocol team fixed this issue in the following PRs/commits:
+https://github.com/saffron-finance/lido-fiv/pull/29
 
-In `LidoVault.sol:720` and `LidoVault.sol:721`, the checkpoint is taken of the ending stakes and balance before a slashing event occurs after the request is claimed in `LidoVault:finalizeVaultEndedWithdrawals()`.
 
-### Internal pre-conditions
-
-None.
-
-### External pre-conditions
-
-Lido slash, which is in scope as per the readme.
-> The Lido Liquid Staking protocol can experience slashing incidents (such as this https://blog.lido.fi/post-mortem-launchnodes-slashing-incident/). These incidents will decrease income from deposits to the Lido Liquid Staking protocol and could decrease the stETH balance. The contract must be operational after it
-
-### Attack Path
-
-1. Variable users have earnings that they have not withdrawn and they call `LidoVault::withdraw()`, which calls `LidoVault::vaultEndedWithdraw()`. It then checkpoints the stakes and balances and requests withdraw of all the steth balance.
-2. Lido slashes the withdrawal.
-3. Users call `LidoVault::finalizeVaultEndedWithdrawals()`, which receives a slashed amount, which will not match the checkpointed stakes and balances ratio and will lead to excess withdraws, not letting all users withdraw, but the first ones profit from it.
-
-### Impact
-
-First users withdrawing get more variable funds than they should but the last ones can not withdraw.
-
-### PoC
-
-Consider that 2 users have 50% of the variable bearer token each and the protocol starts with 100 ETH and 100 Shares.
-After some time, the protocol accrues stEth and the holdings become 200 ETH and 100 shares.
-Before the vault ends, user A withdraws his share of the rewards via `LidoVault::withdraw()`, which is:
-```solidity
-totalEarnings =  200 * (100 + 0) / 100 - 100 = 100
-ethAmountOwed = totalEarnings / 2 = 100 / 2 = 50 // 50% of the bearer tokens, so divides by 2
-protocolFee = 50 * 0.05 = 2.5
-stakesAmountOwed = 50 / 2 = 25 // each share of stETH is worth 2 ETH, the same ratio as the protocol having 200 ETH and 100 shares.
-
-// RESULT
-
-totalProtocolFee = 2.5
-variableToWithdrawnStakingEarningsInShares[userA] = 25
-withdrawnStakingEarningsInStakes = 25
-ETH = 150
-shares = 75
-```
-
-Consider that the vault ended, but the fixed users have not claimed their 100 ETH, which leaves the protocol with 150 ETH and 75 shares.
-
-And lastly, userB withdraws his variable rewards by calling `LidoVault::vaultEndedWithdraw()`. The vault has earnings and 100 ETH of fixed deposits that were not withdrawn, so in the beginning of `LidoVault::vaultEndedWithdraw()` it requests the entire balance of the contract and registers the following:
-```solidity
-vaultEndingStakesAmount = 75
-vaultEndingETHBalance = 150
-```
-Then, `LidoVault::finalizeVaultEndedWithdrawals()` is called, which claims the withdrawals, getting 150 ETH and setting the following variables:
-```solidity
-amountWithdrawn = 140 ETH
-fixedETHDeposit = 100 ETH // was not withdrawn by the fixed users yet
-vaultEndedStakingEarnings = 140 - 100 - (140 - 100) * 0.05 = 40 - 2 = 38
-```
-It calls again `LidoVault::vaultEndedWithdraw()` at the end, which leads to the following `totalEarnings` calculations:
-```solidity
-totalEarnings = 150 * 25 / 75 - 2.5 + 38 = 88.5
-ethAmountOwed = totalEarnings / 2 = 88.5 / 2 = 44.25
-```
-At this point, there is 38 ETH in the contract to variable withdrawals, and userA has withdrawn 25 shares, but userB has not withdrawn any shares.
-
-To calculate userA's amount, we just need to subtract the shares of userA worth in ETH to the `totalEarnings / 2` to get his part:
-```solidity
-ethAmountOwed = 44.25 - 25 * 150 / 75 = -5.75 // In the code it does not underflow because it has checks, it just gives him 0
-```
-So userA gets 0, which is correct (the code ignores if the previous amount is bigger than the current, see [here](https://github.com/sherlock-audit/2024-08-saffron-finance/blob/main/lido-fiv/contracts/LidoVault.sol#L915)) because the shares value has not increased since he withdrew.
-
-Now, as userB has not withdrawn anything, it will get his full `totalEarnings / 2`, which is `44.25`, more than the assigned 38 and will steal from the protocol.
-
-### Mitigation
-
-The fix is recalculating the stakes and balances checkpoints after the claimining from Lido. On `LidoVault::finalizeVaultEndedWithdrawals()`, firstly we reduce the number of stakes pro-rata to the number of ETH to fixed depositors:
-```solidity
-vaultEndingStakesAmount -= fixedETHDeposit * vaultEndingStakesAmount / vaultEndingETHBalance -= 100 * 75 / 150 == 75 - 100 * 75 / 150 == 25
-```
-And now, we calculate the ETH balance on the discounted claim. Let's say that instead of 150 ETH, it withdrew 140 ETH.
-```solidity
-amountWithdrawn = 140 ETH
-fixedETHDeposit = 100 ETH // was not withdrawn by the fixed users yet
-vaultEndedStakingEarnings = 140 - 100 == 40
-vaultEndingETHBalance = vaultEndedStakingEarnings
-vaultEndedStakingEarnings -= vaultEndedStakingEarnings * 0.05 == 40 - 40 * 0.05 == 38
-```
-
-So when it calls `LidoVault::vaultEndedWithdraw()` at the end, it calculates the total earnings:
-```solidity
-totalEarnings = 40 * 25 / 25 - 1.25 * 40 / 25 + 38 = 76
-ethAmountOwed = totalEarnings / 2 = 76 / 2 = 38
-```
-Note that the protocolFee of 2.5 was fixed by replacing it by shares and compute the ETH amount according to the ratio steth ETH / shares.
-Now, userB who has never withdrawn gets 38, the correct amount available in the contract.
-UserA who has withdrawn 25 shares gets 0, which is correct as the ratio has not increased since he withdrew.
-```solidity
-38 - (25 - 1.25) * 40 / 25 == 0
-```
-Note that the fix from the other issue was applied and the withdrawn fee of userB was discounted from the shares.
-
-# Issue M-3: Withdrawing after a slash event before the vault has ended will decrease `fixedSidestETHOnStartCapacity` by less than it should, so following users will withdraw more their initial deposit 
+# Issue M-2: Withdrawing after a slash event before the vault has ended will decrease `fixedSidestETHOnStartCapacity` by less than it should, so following users will withdraw more their initial deposit 
 
 Source: https://github.com/sherlock-audit/2024-08-saffron-finance-judging/issues/92 
+
+The protocol has acknowledged this issue.
 
 ## Found by 
 0x73696d616f
@@ -815,7 +737,7 @@ As the fixed deposit user initially deposited 50, but claimed 55 now, it is gett
 
 The `fixedSidestETHOnStartCapacity` should be always reduced by `fixedETHDeposits.mulDiv(fixedBearerToken[msg.sender], fixedLidoSharesTotalSupply());`, such that users get their equivalent ETH from their initial deposit back and the variable users don't take losses.
 
-# Issue M-4: Attacker will DoS `LidoVault` up to 36 days which will ruin expected apr for all parties involved 
+# Issue M-3: Attacker will DoS `LidoVault` up to 36 days which will ruin expected apr for all parties involved 
 
 Source: https://github.com/sherlock-audit/2024-08-saffron-finance-judging/issues/105 
 
