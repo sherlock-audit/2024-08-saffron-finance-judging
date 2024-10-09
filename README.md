@@ -786,3 +786,13 @@ Firstly, an attacker should not be able to transfer 100 wei of steth and initiat
 
 Secondly, it would be best if there was an alternative way to withdraw in case requests are taking too much.
 
+
+
+## Discussion
+
+**sherlock-admin2**
+
+The protocol team fixed this issue in the following PRs/commits:
+https://github.com/saffron-finance/lido-fiv/pull/30
+
+
